@@ -36,6 +36,36 @@ Everything is a DVC stage driven by `params.yaml`, so the corpus and every metri
 | Primary path | Traditional pipeline; Docling as fallback; Textract as an off-by-default cached fallback | `reports/docling_comparison.md`, `reports/build_vs_buy.md` |
 | Source of truth | JSONL; Markdown (generated from it) feeds Case Study 2 | `reports/format_decision.md` |
 
+## Databricks lakehouse layer
+
+The parsed outputs of LANTERN are loaded into Databricks (Free Edition, serverless) as a governed bronze/silver/gold lakehouse built with PySpark, Delta Lake and Spark SQL. Notebooks are in `databricks/`.
+
+```mermaid
+flowchart LR
+    L[LANTERN outputs<br/>JSONL, facts.csv,<br/>comparison.csv, manifest.csv] --> V[(Unity Catalog Volume)]
+    V --> B[Bronze<br/>raw + lineage columns]
+    B --> S[Silver<br/>typed, de-duplicated]
+    S --> R[gold_reconciliation<br/>Spark SQL vs XBRL]
+    R --> F[gold_financials] --> K[gold_kpis]
+    S --> Q[dq_results<br/>appended per run]
+    R --> Q
+```
+
+| Layer | Tables | What it adds |
+|---|---|---|
+| Bronze | 4 tables (1,705 records, 1,750 XBRL facts, 908 line items, 2 filings) | Raw copy plus `_source_file`, `_ingested_at`, `_run_id` |
+| Silver | `silver_xbrl_facts`, `silver_line_items`, `silver_filings` | Types, 10-digit CIK, standard keys |
+| Gold | `gold_reconciliation`, `gold_financials`, `gold_kpis` | SQL reconciliation and standard KPI definitions |
+| Quality | `dq_results` | 8 checks across 5 dimensions, appended each run |
+
+**Results**
+- SQL reconciliation independently reproduces the Python result: 456/456 traditional, 450/452 Docling, 906/908 overall (99.78%), 0 breaks.
+- Data quality: 6 of 8 checks pass. The 2 failures are real findings: 4 XBRL facts reported at two precisions (rounded in prose, exact in a table, none used by any reconciled line), and the latest filing is past the 10-K freshness window, so a newer annual report is due.
+- 5 KPIs (gross, operating and net margin, free cash flow, revenue growth) are defined once, in `gold_kpis`, from reconciled lines only.
+- Data dictionary: [`docs/data_dictionary.md`](docs/data_dictionary.md), generated from Unity Catalog.
+- Lineage, from raw files to silver to reconciliation: [`docs/lineage_1.png`](docs/lineage_1.png)
+- Lineage, from reconciliation to KPIs: [`docs/lineage_2.png`](docs/lineage_2.png)
+
 ## Architecture Diagram
 
 ![System Architecture](docs/img/architecture.png)
@@ -56,6 +86,7 @@ lantern/
   notebooks/xbrl_validation.ipynb
   docs/codelab.md                  # Codelab source; exported site in docs/lantern-case-study-1/
   app/  deploy/                    # Streamlit UI, FastAPI backend, deployment scripts
+  databricks/                      # Databricks lakehouse notebooks (bronze/silver/gold, DQ, KPIs)
 ```
 
 ## Prerequisites
@@ -195,6 +226,7 @@ Regression thresholds live in `params.yaml` under `eval.thresholds` (measured ba
 | P11 XBRL validation | `src/xbrl.py`, `config/label_map.yaml`, `notebooks/xbrl_validation.ipynb` | `reports/xbrl.md`, `data/xbrl/` |
 | Docs | `docs/codelab.md` | `docs/lantern-case-study-1/` (exported Codelab) |
 | App | `app/api/`, `app/ui/`, `deploy/` | Deployed app section below |
+| Databricks layer | `databricks/01_bronze` … `06_dictionary` | Databricks section above, `docs/data_dictionary.md`, `docs/lineage_*.png` |
 
 ## Codelab
 
